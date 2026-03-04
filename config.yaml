@@ -1,0 +1,47 @@
+# -- Data --
+data:
+  exchange: "binance"
+  base_currency: "USDT"
+  timeframe: "1d"
+  start_date: "2018-01-01"
+  end_date: null
+  top_n_coins: 20
+  exclude:
+    - "USDT"
+    - "USDC"
+    - "BUSD"
+    - "DAI"
+    - "TUSD"
+    - "FDUSD"
+  cache_dir: "src/data/cache"
+
+# -- Signals --
+signals:
+  ema_crossover:
+    fast_period: 10
+    slow_period: 20
+  momentum_zscore:
+    lookback_days: 14
+    entry_threshold: 1.0
+    exit_threshold: 0.0
+    zscore_window: 90
+
+# -- Portfolio --
+portfolio:
+  initial_capital: 5000.0
+  max_positions: 5
+  risk_per_position_pct: 1.5
+  vol_lookback_days: 30
+  rebalance_time_utc: "00:00"
+
+# -- Costs --
+costs:
+  commission_pct: 0.10
+  slippage_pct: 0.02
+
+# -- Backtest --
+backtest:
+  walk_forward:
+    formation_window_days: 180
+    roll_step_days: 30
+  benchmark: "BTC"
