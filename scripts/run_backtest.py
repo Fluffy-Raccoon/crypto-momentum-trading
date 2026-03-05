@@ -14,8 +14,7 @@ from src.data.fetcher import BinanceFetcher
 from src.data.universe import CoinUniverse
 from src.reporting.metrics import compute_metrics
 from src.reporting.tearsheet import generate_tearsheet
-from src.signals.ema_crossover import EMACrossover
-from src.signals.momentum_zscore import MomentumZScore
+from src.signals.factory import create_signal
 
 logging.basicConfig(
     level=logging.INFO,
@@ -69,33 +68,6 @@ def load_config(config_path: str) -> dict:
     with open(config_path) as f:
         return yaml.safe_load(f)
 
-
-def create_signal(signal_type: str, config: dict):
-    """Create a signal generator from config.
-
-    Args:
-        signal_type: "ema" or "zscore".
-        config: Full configuration dict.
-
-    Returns:
-        Signal instance.
-    """
-    if signal_type == "ema":
-        ema_cfg = config["signals"]["ema_crossover"]
-        return EMACrossover(
-            fast_period=ema_cfg["fast_period"],
-            slow_period=ema_cfg["slow_period"],
-        )
-    elif signal_type == "zscore":
-        zs_cfg = config["signals"]["momentum_zscore"]
-        return MomentumZScore(
-            lookback_days=zs_cfg["lookback_days"],
-            zscore_window=zs_cfg["zscore_window"],
-            entry_threshold=zs_cfg["entry_threshold"],
-            exit_threshold=zs_cfg["exit_threshold"],
-        )
-    else:
-        raise ValueError(f"Unknown signal type: {signal_type}")
 
 
 def run_single_backtest(signal_type: str, config: dict, ohlcv_data: dict, output_dir: Path):
