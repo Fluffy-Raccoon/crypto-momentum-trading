@@ -19,7 +19,7 @@ class Signal(ABC):
             prices: DataFrame with at least a 'close' column for one asset.
 
         Returns:
-            Series of signal values: +1 = long, 0 = flat/cash.
+            Series of signal values: +1 = long, 0 = flat/cash, -1 = short.
             Index must match the input price index.
         """
         ...

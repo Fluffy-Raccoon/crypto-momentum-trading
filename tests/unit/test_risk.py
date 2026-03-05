@@ -11,7 +11,9 @@ def risk_config():
     return {
         "portfolio": {
             "max_positions": 5,
-            "risk_per_position_pct": 1.5,
+            "risk_per_position_pct": 7.5,
+            "risk_pct_min": 5.0,
+            "risk_pct_max": 10.0,
         }
     }
 
@@ -56,19 +58,19 @@ class TestRiskManager:
         assert "exceeds equity" in reason.lower()
 
     def test_clamp_risk_pct_low(self, risk_config):
-        """Risk below 1% should be clamped to 1%."""
+        """Risk below min should be clamped to min (5%)."""
         rm = RiskManager(risk_config)
-        assert rm.clamp_risk_pct(0.5) == 1.0
+        assert rm.clamp_risk_pct(2.0) == 5.0
 
     def test_clamp_risk_pct_high(self, risk_config):
-        """Risk above 2% should be clamped to 2%."""
+        """Risk above max should be clamped to max (10%)."""
         rm = RiskManager(risk_config)
-        assert rm.clamp_risk_pct(3.0) == 2.0
+        assert rm.clamp_risk_pct(15.0) == 10.0
 
     def test_clamp_risk_pct_in_range(self, risk_config):
-        """Risk within [1%, 2%] should be unchanged."""
+        """Risk within [5%, 10%] should be unchanged."""
         rm = RiskManager(risk_config)
-        assert rm.clamp_risk_pct(1.5) == 1.5
+        assert rm.clamp_risk_pct(7.5) == 7.5
 
     def test_exposure_acceptable(self, risk_config):
         """Exposure below 100% should be acceptable."""
@@ -95,3 +97,38 @@ class TestRiskManager:
             current_positions=0, trade_size_usd=MIN_TRADE_SIZE, equity=5000.0
         )
         assert allowed is True
+
+    # --- Configurable risk clamp tests ---
+
+    def test_custom_risk_clamp_range(self):
+        """Risk clamps should use custom min/max from config."""
+        config = {
+            "portfolio": {
+                "max_positions": 5,
+                "risk_per_position_pct": 3.0,
+                "risk_pct_min": 2.0,
+                "risk_pct_max": 4.0,
+            }
+        }
+        rm = RiskManager(config)
+        assert rm.clamp_risk_pct(1.0) == 2.0   # below min -> clamped to 2
+        assert rm.clamp_risk_pct(3.0) == 3.0   # in range -> unchanged
+        assert rm.clamp_risk_pct(5.0) == 4.0   # above max -> clamped to 4
+
+    def test_default_risk_clamp_without_config(self):
+        """Without explicit risk_pct_min/max, should default to 5/10."""
+        config = {
+            "portfolio": {
+                "max_positions": 5,
+                "risk_per_position_pct": 7.5,
+            }
+        }
+        rm = RiskManager(config)
+        assert rm.clamp_risk_pct(2.0) == 5.0   # default min = 5
+        assert rm.clamp_risk_pct(15.0) == 10.0  # default max = 10
+
+    def test_clamp_at_exact_boundaries(self, risk_config):
+        """Values at exactly min and max should be unchanged."""
+        rm = RiskManager(risk_config)
+        assert rm.clamp_risk_pct(5.0) == 5.0   # exactly min
+        assert rm.clamp_risk_pct(10.0) == 10.0  # exactly max

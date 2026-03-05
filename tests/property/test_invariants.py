@@ -44,26 +44,26 @@ def price_series(draw, min_length=50, max_length=200):
 # --- Signal boundedness ---
 
 class TestSignalBoundedness:
-    """Signal outputs must always be in {0, 1}."""
+    """Signal outputs must always be in {-1, 0, 1}."""
 
     @given(prices=price_series(min_length=50, max_length=150))
     @settings(max_examples=30, deadline=timedelta(seconds=10))
     def test_ema_signal_bounded(self, prices):
-        """EMA crossover signal values must be in {0, 1}."""
+        """EMA crossover signal values must be in {-1, 0, 1}."""
         signal = EMACrossover(fast_period=5, slow_period=10)
         result = signal.generate(prices)
-        assert set(result.unique()).issubset({0, 1}), f"Got values: {result.unique()}"
+        assert set(result.unique()).issubset({-1, 0, 1}), f"Got values: {result.unique()}"
 
     @given(prices=price_series(min_length=100, max_length=150))
     @settings(max_examples=30, deadline=timedelta(seconds=10))
     def test_zscore_signal_bounded(self, prices):
-        """Momentum Z-score signal values must be in {0, 1}."""
+        """Momentum Z-score signal values must be in {-1, 0, 1}."""
         signal = MomentumZScore(
             lookback_days=5, zscore_window=20,
             entry_threshold=1.0, exit_threshold=0.0,
         )
         result = signal.generate(prices)
-        assert set(result.unique()).issubset({0, 1}), f"Got values: {result.unique()}"
+        assert set(result.unique()).issubset({-1, 0, 1}), f"Got values: {result.unique()}"
 
     @given(prices=price_series(min_length=50, max_length=150))
     @settings(max_examples=30, deadline=timedelta(seconds=10))

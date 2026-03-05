@@ -10,6 +10,12 @@ logger = logging.getLogger(__name__)
 # Minimum annualized volatility to prevent division by near-zero
 MIN_ANNUALIZED_VOL = 0.01
 
+# Bars per day for different timeframes (used for annualization)
+BARS_PER_DAY = {
+    "1m": 1440, "5m": 288, "15m": 96,
+    "1h": 24, "4h": 6, "8h": 3, "1d": 1,
+}
+
 
 class VolatilityPositionSizer:
     """Sizes positions based on realized volatility.
@@ -29,6 +35,8 @@ class VolatilityPositionSizer:
         self._risk_pct = port_cfg["risk_per_position_pct"] / 100.0
         self._max_positions = port_cfg["max_positions"]
         self._vol_lookback = port_cfg.get("vol_lookback_days", 30)
+        timeframe = config.get("data", {}).get("timeframe", "1d")
+        self._bars_per_year = BARS_PER_DAY.get(timeframe, 1) * 365
 
     def compute_position_size(
         self,
@@ -50,27 +58,27 @@ class VolatilityPositionSizer:
         return min(raw_size, max_size)
 
     def compute_annualized_vol(self, prices: pd.DataFrame) -> float:
-        """Compute annualized volatility from trailing daily returns.
+        """Compute annualized volatility from trailing bar returns.
 
         Args:
             prices: OHLCV DataFrame with 'close' column.
 
         Returns:
-            Annualized volatility (daily_std * sqrt(365)).
+            Annualized volatility (bar_std * sqrt(bars_per_year)).
         """
         close = prices["close"]
         if len(close) < 2:
             return MIN_ANNUALIZED_VOL
 
-        daily_returns = close.pct_change().dropna().tail(self._vol_lookback)
-        if len(daily_returns) == 0:
+        bar_returns = close.pct_change().dropna().tail(self._vol_lookback)
+        if len(bar_returns) == 0:
             return MIN_ANNUALIZED_VOL
 
-        daily_std = daily_returns.std()
-        if daily_std == 0 or math.isnan(daily_std):
+        bar_std = bar_returns.std()
+        if bar_std == 0 or math.isnan(bar_std):
             return MIN_ANNUALIZED_VOL
 
-        ann_vol = daily_std * math.sqrt(365)
+        ann_vol = bar_std * math.sqrt(self._bars_per_year)
         return max(ann_vol, MIN_ANNUALIZED_VOL)
 
     def compute_units(

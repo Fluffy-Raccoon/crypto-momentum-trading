@@ -12,8 +12,19 @@ from src.contracts import REQUIRED_OHLCV_COLS, validate_ohlcv
 logger = logging.getLogger(__name__)
 
 
+TIMEFRAME_DURATIONS = {
+    "1m": pd.Timedelta(minutes=1),
+    "5m": pd.Timedelta(minutes=5),
+    "15m": pd.Timedelta(minutes=15),
+    "1h": pd.Timedelta(hours=1),
+    "4h": pd.Timedelta(hours=4),
+    "8h": pd.Timedelta(hours=8),
+    "1d": pd.Timedelta(days=1),
+}
+
+
 class BinanceFetcher:
-    """Fetches daily OHLCV data from Binance with incremental Parquet caching."""
+    """Fetches OHLCV data from Binance with incremental Parquet caching."""
 
     def __init__(self, config: dict, exchange: ccxt.Exchange | None = None) -> None:
         """Initialize fetcher from config dict.
@@ -25,6 +36,9 @@ class BinanceFetcher:
         """
         data_cfg = config["data"]
         self._timeframe = data_cfg.get("timeframe", "1d")
+        self._bar_duration = TIMEFRAME_DURATIONS.get(
+            self._timeframe, pd.Timedelta(days=1)
+        )
         self._cache_dir = Path(data_cfg.get("cache_dir", "src/data/cache"))
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         self._exchange = exchange or ccxt.binance({"enableRateLimit": True})
@@ -58,7 +72,7 @@ class BinanceFetcher:
                 mask = (cached["timestamp"] >= start_ts) & (cached["timestamp"] <= end_ts)
                 return cached.loc[mask].reset_index(drop=True)
             # Fetch only missing data
-            fetch_since = int((last_cached + pd.Timedelta(days=1)).timestamp() * 1000)
+            fetch_since = int((last_cached + self._bar_duration).timestamp() * 1000)
         else:
             cached = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
             fetch_since = int(start_ts.timestamp() * 1000)
@@ -189,6 +203,6 @@ class BinanceFetcher:
         logger.info(f"Cached {len(df)} rows for {symbol} at {path}")
 
     def _cache_path(self, symbol: str) -> Path:
-        """Get the cache file path for a symbol."""
+        """Get the cache file path for a symbol (includes timeframe)."""
         safe_name = symbol.replace("/", "_")
-        return self._cache_dir / f"{safe_name}.parquet"
+        return self._cache_dir / f"{safe_name}_{self._timeframe}.parquet"

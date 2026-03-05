@@ -23,8 +23,8 @@ class RiskManager:
         """
         port_cfg = config["portfolio"]
         self._max_positions = port_cfg["max_positions"]
-        self._risk_pct_min = 1.0  # min risk per position %
-        self._risk_pct_max = 2.0  # max risk per position %
+        self._risk_pct_min = port_cfg.get("risk_pct_min", 5.0)
+        self._risk_pct_max = port_cfg.get("risk_pct_max", 10.0)
 
     def check_new_position(
         self,
@@ -54,7 +54,7 @@ class RiskManager:
         return True, "OK"
 
     def clamp_risk_pct(self, risk_pct: float) -> float:
-        """Clamp risk percentage to allowed range [1%, 2%].
+        """Clamp risk percentage to allowed range.
 
         Args:
             risk_pct: Desired risk percentage.

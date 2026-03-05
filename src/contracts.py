@@ -53,6 +53,6 @@ def validate_signals(df: pd.DataFrame) -> None:
     missing = set(REQUIRED_SIGNAL_COLS) - set(df.columns)
     if missing:
         raise ValueError(f"Signal DataFrame missing columns: {missing}")
-    invalid = set(df["signal"].unique()) - {0, 1}
+    invalid = set(df["signal"].unique()) - {-1, 0, 1}
     if invalid:
-        raise ValueError(f"Signal values must be in {{0, 1}}, got: {invalid}")
+        raise ValueError(f"Signal values must be in {{-1, 0, 1}}, got: {invalid}")

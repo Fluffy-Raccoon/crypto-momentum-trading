@@ -8,7 +8,7 @@ from src.signals.base import Signal
 class EMACrossover(Signal):
     """Generates signals based on fast/slow EMA crossover.
 
-    Signal = +1 when fast EMA > slow EMA, 0 otherwise.
+    Signal = +1 when fast EMA > slow EMA, -1 when fast < slow, 0 during warmup.
     """
 
     def __init__(self, fast_period: int = 10, slow_period: int = 20) -> None:
@@ -30,12 +30,15 @@ class EMACrossover(Signal):
             prices: OHLCV DataFrame with 'close' column.
 
         Returns:
-            Series of {0, 1} signals indexed like the input.
+            Series of {-1, 0, 1} signals indexed like the input.
         """
         close = prices["close"]
         fast_ema = close.ewm(span=self._fast, adjust=False).mean()
         slow_ema = close.ewm(span=self._slow, adjust=False).mean()
-        signal = (fast_ema > slow_ema).astype(int)
+        diff = fast_ema - slow_ema
+        signal = pd.Series(0, index=prices.index, dtype=int)
+        signal[diff > 0] = 1
+        signal[diff < 0] = -1
         # Zero out warmup period where EMA is unreliable
         signal.iloc[: self._slow] = 0
         return signal

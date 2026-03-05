@@ -10,24 +10,34 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class Position:
-    """Represents an open position."""
+    """Represents an open position.
+
+    size > 0 for long positions, size < 0 for short positions.
+    """
 
     symbol: str
     entry_date: pd.Timestamp
     entry_price: float
-    size: float  # number of units
+    size: float  # positive = long, negative = short
     cost: float = 0.0  # entry transaction cost
 
     @property
     def notional_value(self) -> float:
-        """Current notional value at entry price."""
-        return self.size * self.entry_price
+        """Absolute notional value at entry price."""
+        return abs(self.size) * self.entry_price
+
+    @property
+    def side(self) -> str:
+        """Position side: 'long' or 'short'."""
+        return "long" if self.size > 0 else "short"
 
 
 class Portfolio:
     """Tracks portfolio state: positions, equity, and P&L.
 
-    Designed to be stateful but serializable for future live trading.
+    Supports both long and short positions.
+    - Long: buy units, profit when price rises.
+    - Short: borrow and sell units, profit when price falls.
     """
 
     def __init__(self, initial_capital: float, max_positions: int = 5) -> None:
@@ -72,13 +82,13 @@ class Portfolio:
         size: float,
         cost: float = 0.0,
     ) -> bool:
-        """Open a new position.
+        """Open a new long or short position.
 
         Args:
             symbol: Trading pair.
             date: Entry date.
             price: Entry price.
-            size: Number of units.
+            size: Number of units (positive=long, negative=short).
             cost: Transaction cost.
 
         Returns:
@@ -92,17 +102,19 @@ class Portfolio:
             logger.warning(f"Max positions ({self._max_positions}) reached, rejecting {symbol}")
             return False
 
-        trade_value = size * price
-        total_cost = trade_value + cost
+        notional = abs(size) * price
+        # For longs: we pay notional + cost
+        # For shorts: we receive notional but need margin (use notional as collateral)
+        margin_required = notional + cost
 
-        if total_cost > self._cash:
+        if margin_required > self._cash:
             logger.warning(
                 f"Insufficient cash for {symbol}: "
-                f"need {total_cost:.2f}, have {self._cash:.2f}"
+                f"need {margin_required:.2f}, have {self._cash:.2f}"
             )
             return False
 
-        self._cash -= total_cost
+        self._cash -= margin_required
         self._positions[symbol] = Position(
             symbol=symbol,
             entry_date=date,
@@ -110,7 +122,10 @@ class Portfolio:
             size=size,
             cost=cost,
         )
-        logger.info(f"Opened {symbol}: {size:.4f} units @ {price:.2f}, cost={cost:.2f}")
+        side = "long" if size > 0 else "short"
+        logger.info(
+            f"Opened {side} {symbol}: {abs(size):.4f} units @ {price:.2f}, cost={cost:.2f}"
+        )
         return True
 
     def close_position(
@@ -120,7 +135,7 @@ class Portfolio:
         price: float,
         cost: float = 0.0,
     ) -> float | None:
-        """Close an existing position.
+        """Close an existing position (long or short).
 
         Args:
             symbol: Trading pair to close.
@@ -136,15 +151,26 @@ class Portfolio:
             return None
 
         pos = self._positions.pop(symbol)
-        proceeds = pos.size * price
-        pnl = proceeds - (pos.size * pos.entry_price) - pos.cost - cost
-        self._cash += proceeds - cost
+        notional_entry = abs(pos.size) * pos.entry_price
+        notional_exit = abs(pos.size) * price
+
+        if pos.size > 0:
+            # Long: bought at entry, sell at exit
+            pnl = notional_exit - notional_entry - pos.cost - cost
+            # Return notional_exit minus exit cost
+            self._cash += notional_exit - cost
+        else:
+            # Short: sold at entry, buy back at exit
+            # Profit when price goes down
+            pnl = notional_entry - notional_exit - pos.cost - cost
+            # Return collateral + profit (or - loss), minus exit cost
+            self._cash += notional_entry + (notional_entry - notional_exit) - cost
 
         self._trade_log.append({
             "entry_date": pos.entry_date,
             "exit_date": date,
             "symbol": symbol,
-            "side": "long",
+            "side": pos.side,
             "entry_price": pos.entry_price,
             "exit_price": price,
             "size": pos.size,
@@ -152,7 +178,9 @@ class Portfolio:
             "entry_cost": pos.cost,
             "exit_cost": cost,
         })
-        logger.info(f"Closed {symbol}: {pos.size:.4f} units @ {price:.2f}, P&L={pnl:.2f}")
+        logger.info(
+            f"Closed {pos.side} {symbol}: {abs(pos.size):.4f} units @ {price:.2f}, P&L={pnl:.2f}"
+        )
         return pnl
 
     def mark_to_market(self, date: pd.Timestamp, prices: dict[str, float]) -> float:
@@ -165,10 +193,18 @@ class Portfolio:
         Returns:
             Total portfolio equity.
         """
-        positions_value = sum(
-            pos.size * prices.get(pos.symbol, pos.entry_price)
-            for pos in self._positions.values()
-        )
+        positions_value = 0.0
+        for pos in self._positions.values():
+            current_price = prices.get(pos.symbol, pos.entry_price)
+            if pos.size > 0:
+                # Long: value is current market value
+                positions_value += pos.size * current_price
+            else:
+                # Short: collateral (notional at entry) + unrealized P&L
+                notional_entry = abs(pos.size) * pos.entry_price
+                notional_current = abs(pos.size) * current_price
+                positions_value += notional_entry + (notional_entry - notional_current)
+
         equity = self._cash + positions_value
 
         self._equity_history.append({
@@ -197,7 +233,7 @@ class Portfolio:
         return pd.DataFrame(self._trade_log)
 
     def get_total_exposure(self, prices: dict[str, float]) -> float:
-        """Get total exposure as a fraction of equity.
+        """Get total exposure as a fraction of equity (using absolute values).
 
         Args:
             prices: Dict of symbol -> current price.
@@ -205,16 +241,13 @@ class Portfolio:
         Returns:
             Total exposure as fraction (e.g., 0.8 = 80%).
         """
-        equity = self._cash + sum(
-            pos.size * prices.get(pos.symbol, pos.entry_price)
+        positions_value = sum(
+            abs(pos.size) * prices.get(pos.symbol, pos.entry_price)
             for pos in self._positions.values()
         )
+        equity = self._cash + positions_value
         if equity <= 0:
             return 0.0
-        positions_value = sum(
-            pos.size * prices.get(pos.symbol, pos.entry_price)
-            for pos in self._positions.values()
-        )
         return positions_value / equity
 
     def to_dict(self) -> dict:
@@ -229,6 +262,7 @@ class Portfolio:
                     "entry_date": str(p.entry_date),
                     "entry_price": p.entry_price,
                     "size": p.size,
+                    "side": p.side,
                     "cost": p.cost,
                 }
                 for sym, p in self._positions.items()

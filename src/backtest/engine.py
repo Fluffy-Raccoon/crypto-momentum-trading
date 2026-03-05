@@ -23,7 +23,7 @@ class BacktestEngine:
     Implements the walk-forward analysis loop:
     1. Generate rolling windows (formation + trading).
     2. Per window: determine universe, generate signals, rank, select top-N.
-    3. Size positions, execute trades, mark-to-market daily.
+    3. Size positions (long and short), execute trades, mark-to-market.
     4. Stitch trading windows into final equity curve.
     """
 
@@ -210,25 +210,45 @@ class BacktestEngine:
 
             signal_scores[symbol] = (int(last_signal), float(strength))
 
-        # Select top-N with signal = 1, ranked by strength
+        # Select top-N longs (signal=1, ranked by strength descending)
         long_candidates = [
             (sym, strength)
             for sym, (sig_val, strength) in signal_scores.items()
             if sig_val == 1
         ]
         long_candidates.sort(key=lambda x: x[1], reverse=True)
-        target_symbols = [sym for sym, _ in long_candidates[: self._max_positions]]
+
+        # Select top-N shorts (signal=-1, ranked by strength ascending = most negative)
+        short_candidates = [
+            (sym, strength)
+            for sym, (sig_val, strength) in signal_scores.items()
+            if sig_val == -1
+        ]
+        short_candidates.sort(key=lambda x: x[1])  # most negative first
+
+        # Split max_positions between longs and shorts
+        half = self._max_positions // 2
+        long_targets = [sym for sym, _ in long_candidates[:half or self._max_positions]]
+        short_targets = [sym for sym, _ in short_candidates[:half]]
+
+        # Build target map: symbol -> desired side (1 or -1)
+        target_map: dict[str, int] = {}
+        for sym in long_targets:
+            target_map[sym] = 1
+        for sym in short_targets:
+            if sym not in target_map:  # don't conflict with long
+                target_map[sym] = -1
 
         # Get trading days within the window
         trading_days = self._get_trading_days(ohlcv_data, window.trading_start, window.trading_end)
 
         for day in trading_days:
-            self._step(day, target_symbols, signal, ohlcv_data, portfolio, positions_log, window)
+            self._step(day, target_map, signal, ohlcv_data, portfolio, positions_log, window)
 
     def _step(
         self,
         date: pd.Timestamp,
-        target_symbols: list[str],
+        target_map: dict[str, int],
         signal: Signal,
         ohlcv_data: dict[str, pd.DataFrame],
         portfolio: Portfolio,
@@ -239,7 +259,7 @@ class BacktestEngine:
 
         Args:
             date: Current date.
-            target_symbols: Symbols we want to be long.
+            target_map: Symbol -> desired side (1=long, -1=short).
             signal: Signal generator (for re-evaluation).
             ohlcv_data: Full price data.
             portfolio: Portfolio to modify.
@@ -252,9 +272,9 @@ class BacktestEngine:
 
         # Re-evaluate signals using data up to yesterday (no lookahead)
         yesterday = date - pd.Timedelta(days=1)
-        active_targets = set()
+        active_targets: dict[str, int] = {}
 
-        for symbol in target_symbols:
+        for symbol, desired_side in target_map.items():
             if symbol not in ohlcv_data:
                 continue
             df = ohlcv_data[symbol]
@@ -262,20 +282,27 @@ class BacktestEngine:
             if len(available) < signal.min_warmup_days:
                 continue
             signals = signal.generate(available)
-            if not signals.empty and signals.iloc[-1] == 1:
-                active_targets.add(symbol)
+            if not signals.empty:
+                current_signal = int(signals.iloc[-1])
+                # Only keep if signal still agrees with desired side
+                if current_signal == desired_side:
+                    active_targets[symbol] = desired_side
 
-        # Close positions no longer in target
+        # Close positions that are no longer in target or changed side
         for symbol in list(portfolio.positions.keys()):
-            if symbol not in active_targets:
+            pos = portfolio.positions[symbol]
+            pos_side = 1 if pos.size > 0 else -1
+            target_side = active_targets.get(symbol)
+
+            if target_side is None or target_side != pos_side:
                 price = current_prices.get(symbol)
                 if price is not None:
-                    trade_value = portfolio.positions[symbol].size * price
+                    trade_value = abs(pos.size) * price
                     cost = self._cost_model.compute_cost(trade_value)
                     portfolio.close_position(symbol, date, price, cost)
 
         # Open new positions for targets not already held
-        for symbol in active_targets:
+        for symbol, side in active_targets.items():
             if symbol in portfolio.positions:
                 continue
             if symbol not in current_prices:
@@ -290,13 +317,13 @@ class BacktestEngine:
             if len(available) < 2:
                 continue
 
-            size_usd = self._sizer.compute_position_size(
-                portfolio.cash + sum(
-                    p.size * current_prices.get(p.symbol, p.entry_price)
-                    for p in portfolio.positions.values()
-                ),
-                available,
-            )
+            # Estimate equity for sizing
+            equity = portfolio.cash
+            for p in portfolio.positions.values():
+                cp = current_prices.get(p.symbol, p.entry_price)
+                equity += abs(p.size) * cp
+
+            size_usd = self._sizer.compute_position_size(equity, available)
 
             # Risk checks
             allowed, reason = self._risk_mgr.check_new_position(
@@ -307,6 +334,8 @@ class BacktestEngine:
                 continue
 
             units = size_usd / price
+            if side == -1:
+                units = -units  # negative size for short
             cost = self._cost_model.compute_cost(size_usd)
             portfolio.open_position(symbol, date, price, units, cost)
 
@@ -320,7 +349,8 @@ class BacktestEngine:
             positions_log.append({
                 "timestamp": date,
                 "symbol": symbol,
-                "weight": (pos.size * price) / total_equity,
+                "weight": (abs(pos.size) * price) / total_equity,
+                "side": pos.side,
             })
 
     def _close_all_positions(
@@ -334,7 +364,7 @@ class BacktestEngine:
         for symbol in list(portfolio.positions.keys()):
             price = prices.get(symbol)
             if price is not None:
-                trade_value = portfolio.positions[symbol].size * price
+                trade_value = abs(portfolio.positions[symbol].size) * price
                 cost = self._cost_model.compute_cost(trade_value)
                 portfolio.close_position(symbol, date, price, cost)
 

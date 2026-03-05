@@ -8,8 +8,9 @@ from src.signals.base import Signal
 class MomentumZScore(Signal):
     """Generates signals based on trailing return Z-score.
 
-    Entry: Z-score > entry_threshold -> +1 (long).
-    Exit: Z-score < exit_threshold -> 0 (flat).
+    Long: Z-score > entry_threshold -> +1.
+    Short: Z-score < -entry_threshold -> -1.
+    Flat: Z-score crosses exit_threshold toward zero -> 0.
     Uses hysteresis to prevent flickering between states.
     """
 
@@ -40,7 +41,7 @@ class MomentumZScore(Signal):
             prices: OHLCV DataFrame with 'close' column.
 
         Returns:
-            Series of {0, 1} signals indexed like the input.
+            Series of {-1, 0, 1} signals indexed like the input.
         """
         close = prices["close"]
         trailing_return = close.pct_change(self._lookback)
@@ -49,27 +50,30 @@ class MomentumZScore(Signal):
         zscore = (trailing_return - rolling_mean) / rolling_std
 
         # Hysteresis: iterate forward maintaining state to prevent flickering
+        # state: 0 = flat, 1 = long, -1 = short
         signal = pd.Series(0, index=prices.index, dtype=int)
-        in_position = False
+        state = 0
 
         for i in range(len(zscore)):
             z = zscore.iloc[i]
             if pd.isna(z):
                 signal.iloc[i] = 0
-                in_position = False
+                state = 0
                 continue
-            if in_position:
+            if state == 1:  # currently long
                 if z < self._exit:
-                    in_position = False
-                    signal.iloc[i] = 0
-                else:
-                    signal.iloc[i] = 1
-            else:
+                    state = 0
+                signal.iloc[i] = state
+            elif state == -1:  # currently short
+                if z > -self._exit:
+                    state = 0
+                signal.iloc[i] = state
+            else:  # flat
                 if z > self._entry:
-                    in_position = True
-                    signal.iloc[i] = 1
-                else:
-                    signal.iloc[i] = 0
+                    state = 1
+                elif z < -self._entry:
+                    state = -1
+                signal.iloc[i] = state
 
         return signal
 

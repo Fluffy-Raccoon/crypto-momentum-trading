@@ -39,9 +39,9 @@ class TestEMACrossover:
         assert post_warmup.mean() > 0.8, "Strong uptrend should be mostly long"
 
     def test_signal_values_bounded(self, sample_ohlcv):
-        """All signal values must be in {0, 1}."""
+        """All signal values must be in {-1, 0, 1}."""
         signal = EMACrossover(fast_period=10, slow_period=20).generate(sample_ohlcv)
-        assert set(signal.unique()).issubset({0, 1})
+        assert set(signal.unique()).issubset({-1, 0, 1})
 
     def test_output_length_matches_input(self, sample_ohlcv):
         """Output Series must have same length as input DataFrame."""
@@ -63,8 +63,10 @@ class TestEMACrossover:
 
         signal = EMACrossover(fast_period=10, slow_period=20).generate(df)
         # The spike might briefly cause fast > slow, but should revert quickly
-        # After spike settles (say 30 bars), should be back to 0
-        assert signal.iloc[80:].sum() == 0, "Signal should settle back to 0 after spike"
+        # After spike settles (say 30 bars), with flat price fast == slow, signal should be 0
+        # (or -1 if fast is still slightly below slow due to spike decay)
+        late = signal.iloc[80:]
+        assert (late != 1).all(), "Signal should not stay long after spike settles"
 
     def test_signal_strength(self, trending_ohlcv):
         """Signal strength should be positive during uptrend."""
@@ -90,3 +92,38 @@ class TestEMACrossover:
             EMACrossover(fast_period=20, slow_period=10)
         with pytest.raises(ValueError):
             EMACrossover(fast_period=10, slow_period=10)
+
+    def test_downtrend_signals_short(self):
+        """Strong downtrend should produce short (-1) signals after warmup."""
+        n = 200
+        close = 1000.0 * np.cumprod(np.ones(n) * 0.995)  # 0.5% daily decline
+        df = pd.DataFrame({"close": close})
+
+        signal = EMACrossover(fast_period=10, slow_period=20).generate(df)
+        post_warmup = signal.iloc[25:]
+        assert (post_warmup == -1).mean() > 0.8, "Strong downtrend should be mostly short"
+
+    def test_uptrend_then_downtrend_transitions(self):
+        """Signal should transition from +1 to -1 when trend reverses."""
+        up = 100.0 * np.cumprod(np.ones(80) * 1.01)
+        down = up[-1] * np.cumprod(np.ones(80) * 0.99)
+        close = np.concatenate([up, down])
+        df = pd.DataFrame({"close": close})
+
+        signal = EMACrossover(fast_period=5, slow_period=10).generate(df)
+        # Early uptrend should have longs
+        assert (signal.iloc[15:60] == 1).any(), "Should have long signals in uptrend"
+        # Late downtrend should have shorts
+        assert (signal.iloc[100:] == -1).any(), "Should have short signals in downtrend"
+
+    def test_no_zero_after_warmup_except_flat(self):
+        """After warmup, signal should be +1 or -1 (never 0) unless EMAs are exactly equal."""
+        n = 200
+        rng = np.random.default_rng(99)
+        close = 100.0 * np.cumprod(1 + rng.normal(0.001, 0.02, size=n))
+        df = pd.DataFrame({"close": close})
+
+        signal = EMACrossover(fast_period=10, slow_period=20).generate(df)
+        post_warmup = signal.iloc[20:]
+        # With random walk, EMAs are essentially never exactly equal
+        assert set(post_warmup.unique()).issubset({-1, 1})

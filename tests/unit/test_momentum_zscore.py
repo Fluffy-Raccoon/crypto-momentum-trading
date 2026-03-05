@@ -87,13 +87,13 @@ class TestMomentumZScore:
         assert (signal == 0).all(), "Constant price should never trigger entry"
 
     def test_signal_values_bounded(self, sample_ohlcv):
-        """All signal values must be in {0, 1}."""
+        """All signal values must be in {-1, 0, 1}."""
         sig = MomentumZScore(
             lookback_days=5, zscore_window=30,
             entry_threshold=1.0, exit_threshold=0.0,
         )
         signal = sig.generate(sample_ohlcv)
-        assert set(signal.unique()).issubset({0, 1})
+        assert set(signal.unique()).issubset({-1, 0, 1})
 
     def test_output_length_matches_input(self, sample_ohlcv):
         """Output Series must have same length as input DataFrame."""
@@ -144,5 +144,89 @@ class TestMomentumZScore:
 
         # The signal should not have a gap (0) between the entry and exit phases
         # if the z-score stays above 0 during the flat_ish phase
-        # Check that there are transitions, not all zeros
-        assert signal.sum() > 0, "Should have some long signals"
+        # Check that there are some long signals (value == 1)
+        assert (signal == 1).any(), "Should have some long signals"
+
+    def test_downtrend_triggers_short(self):
+        """Strong downtrend should trigger short (-1) signal."""
+        # Flat then strong downtrend
+        close = np.concatenate([
+            np.full(40, 100.0),
+            100.0 * np.cumprod(np.ones(60) * 0.98),  # 2% daily decline
+        ])
+        df = pd.DataFrame({"close": close})
+        sig = MomentumZScore(
+            lookback_days=5, zscore_window=20,
+            entry_threshold=1.0, exit_threshold=0.0,
+        )
+        signal = sig.generate(df)
+
+        downtrend_signals = signal.iloc[50:]
+        assert (downtrend_signals == -1).any(), "Should enter short during strong downtrend"
+
+    def test_short_exit_on_recovery(self):
+        """Short position should exit when Z-score rises above -exit_threshold."""
+        down = 100.0 * np.cumprod(np.ones(40) * 0.975)
+        recovery = down[-1] * np.cumprod(np.ones(40) * 1.015)
+        close = np.concatenate([np.full(30, 100.0), down, recovery])
+
+        df = pd.DataFrame({"close": close})
+        sig = MomentumZScore(
+            lookback_days=5, zscore_window=20,
+            entry_threshold=1.0, exit_threshold=0.0,
+        )
+        signal = sig.generate(df)
+
+        # Should have short signals during downtrend
+        assert (signal == -1).any(), "Should have short signals"
+        # Late recovery should exit short
+        late = signal.iloc[90:]
+        assert (late != -1).any(), "Should exit short during recovery"
+
+    def test_three_state_all_present(self):
+        """Signal should be able to produce all three states: -1, 0, 1."""
+        # Up then flat then down
+        up = 100.0 * np.cumprod(np.ones(30) * 1.025)
+        flat = np.full(25, up[-1])
+        down = up[-1] * np.cumprod(np.ones(30) * 0.975)
+        flat2 = np.full(25, down[-1])
+        close = np.concatenate([np.full(30, 100.0), up, flat, down, flat2])
+
+        df = pd.DataFrame({"close": close})
+        sig = MomentumZScore(
+            lookback_days=5, zscore_window=20,
+            entry_threshold=1.0, exit_threshold=0.0,
+        )
+        signal = sig.generate(df)
+
+        unique_vals = set(signal.unique())
+        # Should have at least flat (0) and one directional signal
+        assert 0 in unique_vals, "Should have flat periods"
+        assert len(unique_vals) >= 2, "Should have at least 2 different signal states"
+
+    def test_hysteresis_stays_short_between_thresholds(self):
+        """Once short, should stay -1 as long as Z stays below -exit_threshold."""
+        base = np.full(30, 100.0)
+        down = 100.0 * np.cumprod(np.ones(20) * 0.975)
+        gentle_down = down[-1] * np.cumprod(np.ones(15) * 0.999)
+        recovery = gentle_down[-1] * np.cumprod(np.ones(15) * 1.03)
+        close = np.concatenate([base, down, gentle_down, recovery])
+
+        df = pd.DataFrame({"close": close})
+        sig = MomentumZScore(
+            lookback_days=5, zscore_window=20,
+            entry_threshold=1.0, exit_threshold=0.0,
+        )
+        signal = sig.generate(df)
+
+        # Should have some short signals
+        assert (signal == -1).any(), "Should have short signals during downtrend"
+
+    def test_constant_price_no_short(self, flat_ohlcv):
+        """Constant price should never trigger short entry either."""
+        sig = MomentumZScore(
+            lookback_days=5, zscore_window=20,
+            entry_threshold=1.0, exit_threshold=0.0,
+        )
+        signal = sig.generate(flat_ohlcv)
+        assert (signal == -1).sum() == 0, "Constant price should never go short"

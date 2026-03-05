@@ -114,3 +114,83 @@ class TestVolatilityPositionSizer:
         sizer = VolatilityPositionSizer(sizer_config)
         size = sizer.compute_position_size(5000.0, sample_ohlcv)
         assert size > 0
+
+    # --- Timeframe-aware annualization tests ---
+
+    def test_4h_annualization_factor(self, known_vol_prices):
+        """4h timeframe should use 6 bars/day * 365 = 2190 bars/year."""
+        config_4h = {
+            "portfolio": {
+                "risk_per_position_pct": 1.5,
+                "max_positions": 5,
+                "vol_lookback_days": 30,
+            },
+            "data": {"timeframe": "4h"},
+        }
+        sizer = VolatilityPositionSizer(config_4h)
+        assert sizer._bars_per_year == 6 * 365
+
+    def test_1d_annualization_factor(self, known_vol_prices):
+        """1d timeframe should use 1 bar/day * 365 = 365 bars/year."""
+        config_1d = {
+            "portfolio": {
+                "risk_per_position_pct": 1.5,
+                "max_positions": 5,
+                "vol_lookback_days": 30,
+            },
+            "data": {"timeframe": "1d"},
+        }
+        sizer = VolatilityPositionSizer(config_1d)
+        assert sizer._bars_per_year == 365
+
+    def test_1h_annualization_factor(self):
+        """1h timeframe should use 24 bars/day * 365 = 8760 bars/year."""
+        config_1h = {
+            "portfolio": {
+                "risk_per_position_pct": 1.5,
+                "max_positions": 5,
+                "vol_lookback_days": 30,
+            },
+            "data": {"timeframe": "1h"},
+        }
+        sizer = VolatilityPositionSizer(config_1h)
+        assert sizer._bars_per_year == 24 * 365
+
+    def test_default_timeframe_is_1d(self):
+        """Missing timeframe config should default to 1d (365 bars/year)."""
+        config_no_tf = {
+            "portfolio": {
+                "risk_per_position_pct": 1.5,
+                "max_positions": 5,
+                "vol_lookback_days": 30,
+            },
+        }
+        sizer = VolatilityPositionSizer(config_no_tf)
+        assert sizer._bars_per_year == 365
+
+    def test_4h_vol_higher_than_1d_same_data(self, known_vol_prices):
+        """4h annualized vol should be higher than 1d because sqrt(2190) > sqrt(365)."""
+        config_4h = {
+            "portfolio": {
+                "risk_per_position_pct": 1.5,
+                "max_positions": 5,
+                "vol_lookback_days": 30,
+            },
+            "data": {"timeframe": "4h"},
+        }
+        config_1d = {
+            "portfolio": {
+                "risk_per_position_pct": 1.5,
+                "max_positions": 5,
+                "vol_lookback_days": 30,
+            },
+            "data": {"timeframe": "1d"},
+        }
+        sizer_4h = VolatilityPositionSizer(config_4h)
+        sizer_1d = VolatilityPositionSizer(config_1d)
+
+        vol_4h = sizer_4h.compute_annualized_vol(known_vol_prices)
+        vol_1d = sizer_1d.compute_annualized_vol(known_vol_prices)
+
+        # Same bar returns but 4h multiplies by sqrt(2190) vs sqrt(365)
+        assert vol_4h > vol_1d

@@ -218,3 +218,36 @@ class TestBinanceFetcher:
         assert "symbol" in df.columns
         assert (df["symbol"] == "BTC/USDT").all()
         assert df["timestamp"].dt.tz is not None
+
+    # --- Timeframe-aware cache path tests ---
+
+    def test_cache_path_includes_timeframe(self, fetcher_config, mock_exchange):
+        """Cache file path should include the timeframe to prevent collisions."""
+        fetcher = make_fetcher(fetcher_config, mock_exchange)
+        path = fetcher._cache_path("BTC/USDT")
+        assert "_1d.parquet" in str(path)
+
+    def test_cache_path_different_timeframes(self, tmp_path, mock_exchange):
+        """Different timeframes should produce different cache paths."""
+        config_1d = {
+            "data": {"timeframe": "1d", "cache_dir": str(tmp_path / "cache")},
+        }
+        config_4h = {
+            "data": {"timeframe": "4h", "cache_dir": str(tmp_path / "cache")},
+        }
+        fetcher_1d = make_fetcher(config_1d, mock_exchange)
+        fetcher_4h = make_fetcher(config_4h, mock_exchange)
+
+        path_1d = fetcher_1d._cache_path("BTC/USDT")
+        path_4h = fetcher_4h._cache_path("BTC/USDT")
+
+        assert path_1d != path_4h
+        assert "BTC_USDT_1d.parquet" in str(path_1d)
+        assert "BTC_USDT_4h.parquet" in str(path_4h)
+
+    def test_cache_path_symbol_sanitized(self, fetcher_config, mock_exchange):
+        """Slash in symbol name should be replaced with underscore."""
+        fetcher = make_fetcher(fetcher_config, mock_exchange)
+        path = fetcher._cache_path("ETH/USDT")
+        assert "/" not in path.name
+        assert "ETH_USDT" in path.name
